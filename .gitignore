@@ -1,0 +1,26 @@
+# Dependencias
+node_modules/
+
+# Archivos de sesión (NO subir a git)
+cookies_seagm.json
+cookies.json
+
+# Screenshots de debug
+debug_*.png
+error_*.png
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Variables de entorno locales
+.env
+.env.local
