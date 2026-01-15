@@ -780,6 +780,45 @@ app.post('/guardar-sesion', async (req, res) => {
     }
 });
 
+// Cargar cookies desde POST (para Railway donde no hay UI)
+app.post('/cargar-cookies', async (req, res) => {
+    try {
+        const { cookies } = req.body;
+        
+        if (!cookies || !Array.isArray(cookies)) {
+            return res.json({ success: false, error: 'Envía un array de cookies en el body: { "cookies": [...] }' });
+        }
+        
+        if (!page) {
+            return res.json({ success: false, error: 'Navegador no inicializado' });
+        }
+        
+        // Cargar cookies en el navegador
+        await page.setCookie(...cookies);
+        log('🍪', `${cookies.length} cookies cargadas via POST`);
+        
+        // Guardar en archivo
+        fs.writeFileSync(CONFIG.COOKIES_FILE, JSON.stringify(cookies, null, 2));
+        log('💾', 'Cookies guardadas en archivo');
+        
+        // Recargar página y verificar sesión
+        await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT });
+        await sleep(2000);
+        await cerrarPopups();
+        
+        const logueado = await verificarSesion();
+        
+        res.json({ 
+            success: logueado, 
+            mensaje: logueado ? 'Cookies cargadas y sesión activa' : 'Cookies cargadas pero sesión no válida',
+            sesion_activa: logueado
+        });
+    } catch (e) {
+        log('❌', 'Error cargando cookies:', e.message);
+        res.json({ success: false, error: e.message });
+    }
+});
+
 // Forzar login
 app.post('/login', async (req, res) => {
     log('🔐', 'Login SEAGM solicitado');
