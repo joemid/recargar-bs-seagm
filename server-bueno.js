@@ -44,6 +44,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let browser = null;
 let page = null;
 let sesionActiva = false;
+let ultimaVerificacion = null;
 let cola = [];
 let procesando = false;
 
@@ -156,29 +157,31 @@ async function cerrarPopups() {
 async function verificarSesion() {
     if (!page) return false;
     try {
+        // Si ya verificamos recientemente (últimos 5 min), confiar en el estado
+        const ahora = Date.now();
+        if (sesionActiva && ultimaVerificacion && (ahora - ultimaVerificacion) < 300000) {
+            log('✅', 'Sesión ACTIVA (verificación reciente)');
+            return true;
+        }
+        
         await cerrarPopups();
+        
+        // Verificación simple: #login-btn = no logueado, #user-btn = logueado
         const logueado = await page.evaluate(() => {
-            const signOutLink = document.querySelector('a[href*="/logout"], a[href*="/signout"]');
-            if (signOutLink) return true;
-            const miCuenta = Array.from(document.querySelectorAll('a')).find(a => 
-                a.textContent.includes('Mi Cuenta') || a.textContent.includes('My Account')
-            );
-            if (miCuenta && miCuenta.offsetParent !== null) return true;
-            const userDropdown = document.querySelector('.user-dropdown, .account-dropdown, [class*="user-name"]');
-            if (userDropdown && userDropdown.textContent.trim().length > 0) return true;
-            const userIcon = document.querySelector('.user-icon + span, .avatar + span');
-            if (userIcon && userIcon.textContent.trim().length > 0) return true;
-            const signInBtn = document.querySelector('a[href*="/sso/login"]:not([class*="hide"])');
-            if (signInBtn) {
-                const hasLogout = document.querySelector('a[href*="/logout"]');
-                return !!hasLogout;
-            }
-            const bodyText = document.body.innerText;
-            if (bodyText.includes('jose.emigdio') || bodyText.includes('JOSE')) return true;
+            const loginBtn = document.querySelector('#login-btn');
+            const userBtn = document.querySelector('#user-btn');
+            
+            // Si existe user-btn, está logueado
+            if (userBtn) return true;
+            // Si existe login-btn, no está logueado
+            if (loginBtn) return false;
+            // Fallback
             return false;
         });
+        
         sesionActiva = logueado;
-        log(logueado ? '✅' : '❌', `Verificación de sesión: ${logueado ? 'ACTIVA' : 'NO ACTIVA'}`);
+        if (logueado) ultimaVerificacion = ahora;
+        log(logueado ? '✅' : '❌', `Sesión: ${logueado ? 'ACTIVA' : 'NO ACTIVA'}`);
         return logueado;
     } catch (e) {
         log('⚠️', 'Error verificando sesión:', e.message);
@@ -432,27 +435,41 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         
         log('✅', 'En página de selección de pago');
         await cerrarPopups();
-        await sleep(500);
+        await sleep(2000); // Más tiempo para que cargue
+        
+        // Esperar a que aparezcan las opciones de pago
+        await page.waitForSelector('.channel, [class*="payment"]', { timeout: 10000 }).catch(() => {});
+        await sleep(1000);
         
         log('6️⃣', 'Seleccionando SEAGM Balance...');
-        const balanceSeleccionado = await page.evaluate(() => {
-            const allDivs = document.querySelectorAll('.channel, [class*="payment"]');
-            for (const div of allDivs) {
-                if (div.textContent.includes('SEAGM Balance')) {
-                    div.click();
+        
+        // Intentar hasta 3 veces
+        let balanceSeleccionado = false;
+        for (let intento = 1; intento <= 3 && !balanceSeleccionado; intento++) {
+            balanceSeleccionado = await page.evaluate(() => {
+                const allDivs = document.querySelectorAll('.channel, [class*="payment"]');
+                for (const div of allDivs) {
+                    if (div.textContent.includes('SEAGM Balance')) {
+                        div.click();
+                        return true;
+                    }
+                }
+                const balanceImg = document.querySelector('img[alt="SEAGM Balance"]');
+                if (balanceImg) {
+                    balanceImg.closest('.channel, label, div')?.click();
                     return true;
                 }
+                return false;
+            });
+            
+            if (!balanceSeleccionado && intento < 3) {
+                log('🔄', `Intento ${intento} falló, esperando...`);
+                await sleep(2000);
             }
-            const balanceImg = document.querySelector('img[alt="SEAGM Balance"]');
-            if (balanceImg) {
-                balanceImg.closest('.channel, label, div')?.click();
-                return true;
-            }
-            return false;
-        });
+        }
         
         if (!balanceSeleccionado) {
-            log('⚠️', 'No se pudo seleccionar SEAGM Balance automáticamente');
+            log('⚠️', 'No se pudo seleccionar SEAGM Balance');
         }
         await sleep(CONFIG.DELAY_MEDIO);
         
@@ -462,17 +479,38 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
             if (payNowBtn) payNowBtn.click();
         });
         
+        await sleep(3000); // Más tiempo
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
         await sleep(2000);
         
         log('8️⃣', 'Ingresando contraseña de confirmación...');
-        await page.waitForSelector('#password, input[name="password"]', { timeout: 10000 }).catch(() => {});
         
-        const passwordInput = await page.$('#password');
-        if (passwordInput) {
-            await passwordInput.click({ clickCount: 3 });
-            await passwordInput.type(CONFIG.PASSWORD, { delay: 30 });
-            await sleep(CONFIG.DELAY_RAPIDO);
+        const passUrl = page.url();
+        log('🔗', `URL: ${passUrl}`);
+        
+        // Esperar campo de contraseña con reintentos
+        let passwordFound = false;
+        for (let intento = 1; intento <= 3 && !passwordFound; intento++) {
+            await page.waitForSelector('#password, input[name="password"]', { timeout: 5000 }).catch(() => {});
             
+            passwordFound = await page.evaluate((password) => {
+                const passInput = document.querySelector('#password') || document.querySelector('input[name="password"]');
+                if (!passInput) return false;
+                
+                passInput.value = password;
+                passInput.dispatchEvent(new Event('input', { bubbles: true }));
+                passInput.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }, CONFIG.PASSWORD);
+            
+            if (!passwordFound && intento < 3) {
+                log('🔄', `Password intento ${intento} falló, esperando...`);
+                await sleep(2000);
+            }
+        }
+        
+        if (passwordFound) {
+            await sleep(500);
             log('9️⃣', 'Confirmando pago...');
             await page.evaluate(() => {
                 const submitBtn = document.querySelector('#submit_button input[type="submit"], #submit_button');
@@ -666,6 +704,25 @@ app.post('/login', async (req, res) => {
     try {
         const exito = await hacerLogin();
         res.json({ success: exito, mensaje: exito ? 'Login exitoso' : 'Login falló' });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
+// Reiniciar navegador sin redeploy
+app.post('/reiniciar', async (req, res) => {
+    log('🔄', 'Reiniciando navegador...');
+    try {
+        if (browser) {
+            await browser.close().catch(() => {});
+        }
+        browser = null;
+        page = null;
+        sesionActiva = false;
+        ultimaVerificacion = null;
+        
+        await iniciarNavegador();
+        res.json({ success: true, mensaje: 'Navegador reiniciado' });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }

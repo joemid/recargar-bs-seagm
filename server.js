@@ -412,6 +412,9 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         const currentUrl = page.url();
         if (!currentUrl.includes('order_checkout') && !currentUrl.includes('cart')) {
             log('⚠️', 'No se llegó al checkout, URL actual:', currentUrl);
+            // Recuperar estado
+            await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+            await cerrarPopups();
             return { success: false, error: 'No se pudo llegar al checkout' };
         }
         
@@ -430,6 +433,9 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         const payUrl = page.url();
         if (!payUrl.includes('pay.seagm.com')) {
             log('⚠️', 'No se llegó a la página de pago, URL:', payUrl);
+            // Recuperar estado
+            await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+            await cerrarPopups();
             return { success: false, error: 'No se pudo llegar a la página de pago' };
         }
         
@@ -560,12 +566,35 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
             const screenshotPath = `./debug_${Date.now()}.png`;
             await page.screenshot({ path: screenshotPath, fullPage: true });
             log('📸', `Screenshot guardado: ${screenshotPath}`);
+            // Recuperar estado
+            await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+            await cerrarPopups();
             return { success: false, error: 'No se pudo confirmar la compra' };
         }
         
         const elapsed = Date.now() - start;
         log('🎉', `RECARGA COMPLETADA en ${elapsed}ms`);
         log('🧾', `Order ID: ${orderId || 'N/A'}`);
+        
+        // ========== VOLVER A PÁGINA DE BS PARA SIGUIENTE RECARGA ==========
+        log('🔄', 'Volviendo a página de Blood Strike...');
+        try {
+            await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT });
+            await sleep(1500);
+            await cerrarPopups();
+            
+            // Limpiar campo de User ID para siguiente recarga
+            await page.evaluate(() => {
+                const userIdInput = document.querySelector('input[name="userid"]');
+                if (userIdInput) {
+                    userIdInput.value = '';
+                    userIdInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            });
+            log('✅', 'Página lista para siguiente recarga');
+        } catch (e) {
+            log('⚠️', 'Error volviendo a BS:', e.message);
+        }
         
         return {
             success: true,
@@ -585,6 +614,18 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
             await page.screenshot({ path: screenshotPath, fullPage: true });
             log('📸', `Screenshot de error: ${screenshotPath}`);
         } catch (se) {}
+        
+        // ========== VOLVER A PÁGINA DE BS INCLUSO EN ERROR ==========
+        try {
+            log('🔄', 'Recuperando estado - volviendo a BS...');
+            await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: 30000 });
+            await sleep(1000);
+            await cerrarPopups();
+            log('✅', 'Estado recuperado');
+        } catch (re) {
+            log('⚠️', 'No se pudo recuperar estado:', re.message);
+        }
+        
         return { success: false, error: e.message };
     }
 }
