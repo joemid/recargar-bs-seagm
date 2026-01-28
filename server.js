@@ -236,74 +236,101 @@ async function hacerLogin() {
         log('🔐', 'Iniciando login en SEAGM...');
         
         // Ir a página de login
-        await page.goto(CONFIG.URL_LOGIN, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT });
-        await sleep(2000);
+        await page.goto(CONFIG.URL_LOGIN, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT });
         
-        await cerrarPopups();
+        // ========== CERRAR COOKIEBOT RÁPIDO ==========
+        // Esperar a que aparezca el botón y cerrarlo inmediatamente
+        try {
+            await page.waitForSelector('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', { timeout: 5000 });
+            await page.click('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll');
+            log('🍪', 'Cookiebot cerrado');
+            await sleep(500);
+        } catch (e) {
+            // Si no aparece, intentar con evaluate
+            await page.evaluate(() => {
+                const btn = document.querySelector('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll');
+                if (btn) btn.click();
+            });
+        }
         
         // Verificar si ya está logueado (redirigió)
-        const currentUrl = page.url();
-        if (!currentUrl.includes('/sso/login')) {
-            log('✅', 'Ya estaba logueado (redirigido)');
+        if (!page.url().includes('/sso/login')) {
+            log('✅', 'Ya estaba logueado');
             sesionActiva = true;
             await guardarCookies();
             return true;
         }
         
-        // Asegurarse de que está en tab de "Cuenta de usuario" (email)
-        const emailTab = await page.$('input[type="radio"][value="email"]');
-        if (emailTab) {
-            await emailTab.click();
-            await sleep(300);
-        }
+        // ========== LLENAR Y ENVIAR FORMULARIO ==========
+        log('📧', 'Llenando formulario...');
         
-        // Llenar email
-        log('📧', 'Ingresando email...');
+        // Esperar campos
         await page.waitForSelector('#login_email', { timeout: 10000 });
-        await page.click('#login_email', { clickCount: 3 }); // Seleccionar todo
-        await page.type('#login_email', CONFIG.EMAIL, { delay: 30 });
-        await sleep(CONFIG.DELAY_RAPIDO);
         
-        // Llenar password
-        log('🔑', 'Ingresando contraseña...');
-        await page.click('#login_pass', { clickCount: 3 });
-        await page.type('#login_pass', CONFIG.PASSWORD, { delay: 30 });
-        await sleep(CONFIG.DELAY_RAPIDO);
-        
-        // Click en "Iniciar sesión"
-        log('🚀', 'Enviando login...');
-        await page.evaluate(() => {
+        // Llenar todo con evaluate (más rápido y robusto)
+        const loginResult = await page.evaluate((email, password) => {
+            // Seleccionar tab email
+            const emailRadio = document.querySelector('input[value="email"]');
+            if (emailRadio) emailRadio.click();
+            
+            // Llenar campos
+            const emailInput = document.querySelector('#login_email');
+            const passInput = document.querySelector('#login_pass');
+            if (!emailInput || !passInput) return { error: 'Campos no encontrados' };
+            
+            emailInput.value = email;
+            passInput.value = password;
+            emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+            passInput.dispatchEvent(new Event('input', { bubbles: true }));
+            
+            // Submit
             const submitBtn = document.querySelector('#login_btw input[type="submit"]');
-            if (submitBtn) submitBtn.click();
-        });
+            if (submitBtn) {
+                submitBtn.click();
+                return { success: true, method: 'submit-btn' };
+            }
+            
+            const form = document.querySelector('#sso_form');
+            if (form) {
+                form.submit();
+                return { success: true, method: 'form-submit' };
+            }
+            
+            return { error: 'No se pudo enviar' };
+        }, CONFIG.EMAIL, CONFIG.PASSWORD);
         
-        // Esperar redirección o respuesta
-        await sleep(5000);
-        
-        // Verificar si hay error
-        const hayError = await page.evaluate(() => {
-            const alertEl = document.querySelector('#email_login_alert');
-            if (alertEl && alertEl.textContent.trim()) return alertEl.textContent.trim();
-            return null;
-        });
-        
-        if (hayError) {
-            log('❌', `Error de login: ${hayError}`);
+        if (loginResult.error) {
+            log('❌', loginResult.error);
             return false;
         }
         
-        // Verificar login exitoso
-        const newUrl = page.url();
-        if (!newUrl.includes('/sso/login')) {
+        log('🚀', `Login enviado (${loginResult.method})`);
+        
+        // Esperar respuesta
+        await sleep(4000);
+        
+        // Verificar error
+        const error = await page.evaluate(() => {
+            const alert = document.querySelector('#email_login_alert');
+            return alert?.textContent?.trim() || null;
+        });
+        
+        if (error) {
+            log('❌', `Error: ${error}`);
+            return false;
+        }
+        
+        // Verificar éxito
+        if (!page.url().includes('/sso/login')) {
             log('✅', 'Login exitoso!');
             sesionActiva = true;
             await guardarCookies();
             return true;
         }
         
-        // Intentar verificar de otra forma
-        await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT });
-        await sleep(2000);
+        // Verificar en página de BS
+        await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT });
+        await sleep(1500);
         
         const logueado = await verificarSesion();
         if (logueado) {
@@ -315,7 +342,8 @@ async function hacerLogin() {
         return false;
         
     } catch (e) {
-        log('❌', `Error en login: ${e.message}`);
+        log('❌', `Error: ${e.message}`);
+        try { await page.screenshot({ path: './error_login.png' }); } catch {}
         return false;
     }
 }
@@ -382,6 +410,11 @@ async function initBrowser() {
         
         if (loginOk) {
             log('✅', 'Login automático exitoso');
+            // Navegar a Blood Strike después del login
+            log('🌐', 'Navegando a Blood Strike...');
+            await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT });
+            await sleep(1500);
+            await cerrarPopups();
         } else {
             log('⚠️', '═'.repeat(45));
             log('⚠️', 'NO SE PUDO INICIAR SESIÓN');
