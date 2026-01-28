@@ -432,11 +432,7 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         
         log('✅', 'En página de selección de pago');
         await cerrarPopups();
-        await sleep(2000); // Más tiempo para que cargue
-        
-        // Esperar a que aparezcan las opciones de pago
-        await page.waitForSelector('.channel, [class*="payment"]', { timeout: 10000 }).catch(() => {});
-        await sleep(1000);
+        await sleep(500);
         
         log('6️⃣', 'Seleccionando SEAGM Balance...');
         const balanceSeleccionado = await page.evaluate(() => {
@@ -466,20 +462,12 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
             if (payNowBtn) payNowBtn.click();
         });
         
-        await sleep(3000); // Más tiempo
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
         await sleep(2000);
         
         log('8️⃣', 'Ingresando contraseña de confirmación...');
+        await page.waitForSelector('#password, input[name="password"]', { timeout: 10000 }).catch(() => {});
         
-        // Debug
-        const passUrl = page.url();
-        log('🔗', `URL: ${passUrl}`);
-        
-        await page.waitForSelector('#password, input[name="password"]', { timeout: 15000 }).catch(() => {});
-        await sleep(500);
-        
-        const passwordInput = await page.$('#password') || await page.$('input[name="password"]');
+        const passwordInput = await page.$('#password');
         if (passwordInput) {
             await passwordInput.click({ clickCount: 3 });
             await passwordInput.type(CONFIG.PASSWORD, { delay: 30 });
