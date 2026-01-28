@@ -439,34 +439,24 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         await sleep(1000);
         
         log('6️⃣', 'Seleccionando SEAGM Balance...');
-        
-        // Intentar hasta 3 veces
-        let balanceSeleccionado = false;
-        for (let intento = 1; intento <= 3 && !balanceSeleccionado; intento++) {
-            balanceSeleccionado = await page.evaluate(() => {
-                const allDivs = document.querySelectorAll('.channel, [class*="payment"]');
-                for (const div of allDivs) {
-                    if (div.textContent.includes('SEAGM Balance')) {
-                        div.click();
-                        return true;
-                    }
-                }
-                const balanceImg = document.querySelector('img[alt="SEAGM Balance"]');
-                if (balanceImg) {
-                    balanceImg.closest('.channel, label, div')?.click();
+        const balanceSeleccionado = await page.evaluate(() => {
+            const allDivs = document.querySelectorAll('.channel, [class*="payment"]');
+            for (const div of allDivs) {
+                if (div.textContent.includes('SEAGM Balance')) {
+                    div.click();
                     return true;
                 }
-                return false;
-            });
-            
-            if (!balanceSeleccionado && intento < 3) {
-                log('🔄', `Intento ${intento} falló, esperando...`);
-                await sleep(2000);
             }
-        }
+            const balanceImg = document.querySelector('img[alt="SEAGM Balance"]');
+            if (balanceImg) {
+                balanceImg.closest('.channel, label, div')?.click();
+                return true;
+            }
+            return false;
+        });
         
         if (!balanceSeleccionado) {
-            log('⚠️', 'No se pudo seleccionar SEAGM Balance');
+            log('⚠️', 'No se pudo seleccionar SEAGM Balance automáticamente');
         }
         await sleep(CONFIG.DELAY_MEDIO);
         
@@ -482,32 +472,19 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         
         log('8️⃣', 'Ingresando contraseña de confirmación...');
         
+        // Debug
         const passUrl = page.url();
         log('🔗', `URL: ${passUrl}`);
         
-        // Esperar campo de contraseña con reintentos
-        let passwordFound = false;
-        for (let intento = 1; intento <= 3 && !passwordFound; intento++) {
-            await page.waitForSelector('#password, input[name="password"]', { timeout: 5000 }).catch(() => {});
-            
-            passwordFound = await page.evaluate((password) => {
-                const passInput = document.querySelector('#password') || document.querySelector('input[name="password"]');
-                if (!passInput) return false;
-                
-                passInput.value = password;
-                passInput.dispatchEvent(new Event('input', { bubbles: true }));
-                passInput.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-            }, CONFIG.PASSWORD);
-            
-            if (!passwordFound && intento < 3) {
-                log('🔄', `Password intento ${intento} falló, esperando...`);
-                await sleep(2000);
-            }
-        }
+        await page.waitForSelector('#password, input[name="password"]', { timeout: 15000 }).catch(() => {});
+        await sleep(500);
         
-        if (passwordFound) {
-            await sleep(500);
+        const passwordInput = await page.$('#password') || await page.$('input[name="password"]');
+        if (passwordInput) {
+            await passwordInput.click({ clickCount: 3 });
+            await passwordInput.type(CONFIG.PASSWORD, { delay: 30 });
+            await sleep(CONFIG.DELAY_RAPIDO);
+            
             log('9️⃣', 'Confirmando pago...');
             await page.evaluate(() => {
                 const submitBtn = document.querySelector('#submit_button input[type="submit"], #submit_button');
