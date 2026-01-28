@@ -17,23 +17,18 @@ const CONFIG = {
     DELAY_RAPIDO: 300,
     DELAY_MEDIO: 800,
     DELAY_LARGO: 1500,
-    // MODO TEST: false = producción (compras reales), true = solo pruebas
     MODO_TEST: process.env.MODO_TEST === 'true' ? true : false,
-    // URLs de SEAGM
     URL_BLOOD_STRIKE: 'https://www.seagm.com/es/blood-strike-gold-top-up',
     URL_LOGIN: 'https://member.seagm.com/es/sso/login',
     URL_BASE: 'https://www.seagm.com',
-    // Credenciales (usar variables de entorno en producción)
     EMAIL: process.env.SEAGM_EMAIL || 'jose.emigdio@gmail.com',
     PASSWORD: process.env.SEAGM_PASSWORD || 'Amateratsu20',
-    // Archivo para guardar cookies de sesión
     COOKIES_FILE: './cookies_seagm.json'
 };
 
 const SUPABASE_URL = 'https://jodltxvsernvdevqkswp.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpvZGx0eHZzZXJudmRldnFrc3dwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzNDA5MjAsImV4cCI6MjA4MTkxNjkyMH0.hG0VSDrdU2QAHVoUdJoDuCmCMyLb0lU5Oepfi7MJ_bA';
 
-// Mapeo de Gold a SKU de SEAGM
 const PAQUETES_SEAGM = {
     51:   { sku: '23581', nombre: '50 + 1 Golds', precio: 0.31 },
     105:  { sku: '24799', nombre: '100 + 5 Golds', precio: 0.61 },
@@ -52,7 +47,6 @@ let sesionActiva = false;
 let cola = [];
 let procesando = false;
 
-// ========== LOGS ==========
 function log(emoji, mensaje, datos = null) {
     const tiempo = new Date().toLocaleTimeString('es-VE', { timeZone: 'America/Caracas' });
     const texto = `[${tiempo}] ${emoji} ${mensaje}`;
@@ -63,7 +57,6 @@ function log(emoji, mensaje, datos = null) {
     }
 }
 
-// ========== SUPABASE ==========
 async function supabaseQuery(table, query = '') {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${query}`, {
         headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
@@ -88,7 +81,6 @@ async function supabaseInsert(table, data) {
     return res.json();
 }
 
-// ========== COOKIES / SESIÓN ==========
 async function guardarCookies() {
     if (!page) return;
     try {
@@ -115,19 +107,15 @@ async function cargarCookies() {
     return false;
 }
 
-// Cerrar popups de cookies o modales (funciona en www.seagm.com y pay.seagm.com)
 async function cerrarPopups() {
     if (!page) return;
     try {
         const cerrado = await page.evaluate(() => {
-            // 1. Cookiebot - Botón verde "Allow all" (aparece en pay.seagm.com)
             const allowAll = document.querySelector('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept');
             if (allowAll && allowAll.offsetParent !== null) {
                 allowAll.click();
                 return 'cookiebot-allow';
             }
-            
-            // 2. Cualquier botón dentro del dialog de Cookiebot
             const cookiebotDialog = document.querySelector('#CybotCookiebotDialog');
             if (cookiebotDialog && cookiebotDialog.offsetParent !== null) {
                 const allowBtn = cookiebotDialog.querySelector('button[id*="Allow"], button[id*="Accept"], .CybotCookiebotDialogBodyButton');
@@ -136,8 +124,6 @@ async function cerrarPopups() {
                     return 'cookiebot-dialog';
                 }
             }
-            
-            // 3. Buscar por texto exacto "Allow all" en cualquier botón
             const allButtons = Array.from(document.querySelectorAll('button'));
             for (const btn of allButtons) {
                 if (btn.textContent.trim() === 'Allow all' && btn.offsetParent !== null) {
@@ -145,15 +131,11 @@ async function cerrarPopups() {
                     return 'allow-all-text';
                 }
             }
-            
-            // 4. Botón genérico de aceptar cookies
             const acceptBtn = document.querySelector('[data-cky-tag="accept-button"], .cky-btn-accept');
             if (acceptBtn && acceptBtn.offsetParent !== null) {
                 acceptBtn.click();
                 return 'cookies-generic';
             }
-            
-            // 5. Buscar botones con texto de aceptar
             const acceptTexts = ['allow all', 'accept all', 'aceptar todo', 'accept'];
             for (const btn of allButtons) {
                 const txt = btn.textContent.toLowerCase().trim();
@@ -162,63 +144,39 @@ async function cerrarPopups() {
                     return 'text-match';
                 }
             }
-            
             return null;
         });
-        
         if (cerrado) {
             log('🍪', `Popup cerrado: ${cerrado}`);
             await sleep(300);
         }
-    } catch (e) {
-        // Ignorar errores
-    }
+    } catch (e) {}
 }
 
-// Verificar si hay sesión activa en SEAGM
 async function verificarSesion() {
     if (!page) return false;
-    
     try {
-        // Cerrar popups primero
         await cerrarPopups();
-        
-        // Buscar indicadores de sesión activa en SEAGM
         const logueado = await page.evaluate(() => {
-            // 1. Buscar enlace de "Sign Out" o "Cerrar sesión" (indica que SÍ está logueado)
             const signOutLink = document.querySelector('a[href*="/logout"], a[href*="/signout"]');
             if (signOutLink) return true;
-            
-            // 2. Buscar "Mi Cuenta" visible
             const miCuenta = Array.from(document.querySelectorAll('a')).find(a => 
-                a.textContent.includes('Mi Cuenta') || 
-                a.textContent.includes('My Account')
+                a.textContent.includes('Mi Cuenta') || a.textContent.includes('My Account')
             );
             if (miCuenta && miCuenta.offsetParent !== null) return true;
-            
-            // 3. Buscar nombre de usuario en header (usualmente un dropdown)
             const userDropdown = document.querySelector('.user-dropdown, .account-dropdown, [class*="user-name"]');
             if (userDropdown && userDropdown.textContent.trim().length > 0) return true;
-            
-            // 4. Buscar icono de usuario con nombre
             const userIcon = document.querySelector('.user-icon + span, .avatar + span');
             if (userIcon && userIcon.textContent.trim().length > 0) return true;
-            
-            // 5. Verificar que NO hay botón de "Sign In" visible prominente
             const signInBtn = document.querySelector('a[href*="/sso/login"]:not([class*="hide"])');
             if (signInBtn) {
-                // Hay botón de login visible, verificar si también hay logout
                 const hasLogout = document.querySelector('a[href*="/logout"]');
                 return !!hasLogout;
             }
-            
-            // 6. Buscar cualquier elemento que muestre email o username
             const bodyText = document.body.innerText;
             if (bodyText.includes('jose.emigdio') || bodyText.includes('JOSE')) return true;
-            
             return false;
         });
-        
         sesionActiva = logueado;
         log(logueado ? '✅' : '❌', `Verificación de sesión: ${logueado ? 'ACTIVA' : 'NO ACTIVA'}`);
         return logueado;
@@ -228,32 +186,27 @@ async function verificarSesion() {
     }
 }
 
-// Login automático en SEAGM
+// ========== LOGIN CON FIX COOKIEBOT ==========
 async function hacerLogin() {
     if (!page) return false;
-    
     try {
         log('🔐', 'Iniciando login en SEAGM...');
-        
-        // Ir a página de login
         await page.goto(CONFIG.URL_LOGIN, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT });
         
-        // ========== CERRAR COOKIEBOT RÁPIDO ==========
-        // Esperar a que aparezca el botón y cerrarlo inmediatamente
+        // ========== CERRAR COOKIEBOT PRIMERO ==========
         try {
             await page.waitForSelector('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', { timeout: 5000 });
             await page.click('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll');
             log('🍪', 'Cookiebot cerrado');
             await sleep(500);
         } catch (e) {
-            // Si no aparece, intentar con evaluate
             await page.evaluate(() => {
                 const btn = document.querySelector('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll');
                 if (btn) btn.click();
             });
         }
         
-        // Verificar si ya está logueado (redirigió)
+        // Ya logueado?
         if (!page.url().includes('/sso/login')) {
             log('✅', 'Ya estaba logueado');
             sesionActiva = true;
@@ -261,19 +214,14 @@ async function hacerLogin() {
             return true;
         }
         
-        // ========== LLENAR Y ENVIAR FORMULARIO ==========
+        // ========== LLENAR FORMULARIO ==========
         log('📧', 'Llenando formulario...');
-        
-        // Esperar campos
         await page.waitForSelector('#login_email', { timeout: 10000 });
         
-        // Llenar todo con evaluate (más rápido y robusto)
         const loginResult = await page.evaluate((email, password) => {
-            // Seleccionar tab email
             const emailRadio = document.querySelector('input[value="email"]');
             if (emailRadio) emailRadio.click();
             
-            // Llenar campos
             const emailInput = document.querySelector('#login_email');
             const passInput = document.querySelector('#login_pass');
             if (!emailInput || !passInput) return { error: 'Campos no encontrados' };
@@ -283,19 +231,8 @@ async function hacerLogin() {
             emailInput.dispatchEvent(new Event('input', { bubbles: true }));
             passInput.dispatchEvent(new Event('input', { bubbles: true }));
             
-            // Submit
             const submitBtn = document.querySelector('#login_btw input[type="submit"]');
-            if (submitBtn) {
-                submitBtn.click();
-                return { success: true, method: 'submit-btn' };
-            }
-            
-            const form = document.querySelector('#sso_form');
-            if (form) {
-                form.submit();
-                return { success: true, method: 'form-submit' };
-            }
-            
+            if (submitBtn) { submitBtn.click(); return { success: true }; }
             return { error: 'No se pudo enviar' };
         }, CONFIG.EMAIL, CONFIG.PASSWORD);
         
@@ -304,9 +241,7 @@ async function hacerLogin() {
             return false;
         }
         
-        log('🚀', `Login enviado (${loginResult.method})`);
-        
-        // Esperar respuesta
+        log('🚀', 'Login enviado');
         await sleep(4000);
         
         // Verificar error
@@ -340,24 +275,19 @@ async function hacerLogin() {
         
         log('❌', 'Login falló');
         return false;
-        
     } catch (e) {
         log('❌', `Error: ${e.message}`);
-        try { await page.screenshot({ path: './error_login.png' }); } catch {}
         return false;
     }
 }
 
-// Asegurar sesión
 async function asegurarSesion() {
     const logueado = await verificarSesion();
     if (logueado) return true;
-    
     log('⚠️', 'Sesión no detectada, intentando login...');
     return await hacerLogin();
 }
 
-// ========== INICIAR NAVEGADOR ==========
 async function initBrowser() {
     if (browser) return;
     
@@ -367,61 +297,36 @@ async function initBrowser() {
     browser = await puppeteer.launch({
         headless: isRailway ? 'new' : false,
         executablePath: isRailway ? '/usr/bin/google-chrome-stable' : undefined,
-        args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox', 
-            '--disable-dev-shm-usage',
-            '--disable-animations',
-            '--disable-extensions',
-            '--window-size=1200,900'
-        ]
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-animations', '--disable-extensions', '--window-size=1200,900']
     });
     
     page = await browser.newPage();
     await page.setViewport({ width: 1200, height: 900 });
-    
-    // User agent más realista
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
-    // 1. Cargar cookies ANTES de navegar
     const cookiesCargadas = await cargarCookies();
     
-    // 2. Ir directo a la página de Blood Strike
     log('🌐', 'Cargando SEAGM Blood Strike...');
     await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT });
     await sleep(2000);
-    
-    // 3. Cerrar popup de cookies si aparece
     await cerrarPopups();
     await sleep(500);
-    await cerrarPopups(); // Doble intento por si tarda en cargar
+    await cerrarPopups();
     
-    // 4. Verificar si la sesión es válida
     const logueado = await verificarSesion();
     
     if (logueado) {
         log('✅', 'Sesión SEAGM activa (cookies válidas)');
-        await guardarCookies(); // Actualizar cookies
+        await guardarCookies();
     } else {
         log('⚠️', 'Sesión no válida, intentando login automático...');
-        
-        // Intentar login automático
         const loginOk = await hacerLogin();
-        
         if (loginOk) {
             log('✅', 'Login automático exitoso');
-            // Navegar a Blood Strike después del login
-            log('🌐', 'Navegando a Blood Strike...');
-            await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT });
-            await sleep(1500);
-            await cerrarPopups();
         } else {
             log('⚠️', '═'.repeat(45));
             log('⚠️', 'NO SE PUDO INICIAR SESIÓN');
-            log('⚠️', 'Opciones:');
-            log('⚠️', '1. Inicia sesión manualmente en el navegador');
-            log('⚠️', '2. Llama a POST /guardar-sesion');
-            log('⚠️', '3. O usa POST /login para reintentar');
+            log('⚠️', 'Usa POST /cargar-cookies para subir cookies');
             log('⚠️', '═'.repeat(45));
         }
     }
@@ -429,7 +334,6 @@ async function initBrowser() {
     log('✅', 'Navegador listo');
 }
 
-// ========== RECARGA BLOOD STRIKE SEAGM ==========
 async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
     const start = Date.now();
     
@@ -438,44 +342,29 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         log('🎮', hacerCompra ? 'INICIANDO RECARGA BLOOD STRIKE (SEAGM)' : 'TEST (SIN COMPRAR)');
         log('📋', `ID: ${idJugador} | Gold: ${goldCantidad}`);
         
-        // Verificar paquete válido
         const paquete = PAQUETES_SEAGM[goldCantidad];
         if (!paquete) {
             return { success: false, error: `Paquete de ${goldCantidad} Gold no disponible en SEAGM` };
         }
         log('📦', `Paquete: ${paquete.nombre} - $${paquete.precio}`);
         
-        // Asegurar sesión
         const sesionOk = await asegurarSesion();
         if (!sesionOk) {
             return { success: false, error: 'No se pudo iniciar sesión en SEAGM' };
         }
         
-        // ========== PASO 1: Ir a página de Blood Strike ==========
         log('1️⃣', 'Cargando página de Blood Strike...');
         await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT });
         await sleep(1500);
         await cerrarPopups();
         await sleep(500);
         
-        // ========== PASO 2: Seleccionar paquete ==========
         log('2️⃣', `Seleccionando paquete SKU: ${paquete.sku}...`);
-        
         const paqueteSeleccionado = await page.evaluate((sku) => {
-            // Buscar el radio button con el SKU correcto
             const radio = document.querySelector(`input[name="topupType"][value="${sku}"]`);
-            if (radio) {
-                radio.click();
-                return true;
-            }
-            
-            // Alternativa: buscar por data-sku
+            if (radio) { radio.click(); return true; }
             const skuDiv = document.querySelector(`.SKU_type[data-sku="${sku}"]`);
-            if (skuDiv) {
-                skuDiv.click();
-                return true;
-            }
-            
+            if (skuDiv) { skuDiv.click(); return true; }
             return false;
         }, paquete.sku);
         
@@ -484,20 +373,15 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         }
         await sleep(CONFIG.DELAY_MEDIO);
         
-        // ========== PASO 3: Ingresar User ID ==========
         log('3️⃣', 'Ingresando ID de jugador...');
-        
-        // Buscar el input de userid
         const userIdInput = await page.$('input[name="userid"]');
         if (!userIdInput) {
             return { success: false, error: 'No se encontró el campo de User ID' };
         }
-        
         await userIdInput.click({ clickCount: 3 });
         await userIdInput.type(idJugador, { delay: 30 });
         await sleep(CONFIG.DELAY_MEDIO);
         
-        // Si es modo test, parar aquí
         if (!hacerCompra || CONFIG.MODO_TEST) {
             const elapsed = Date.now() - start;
             log('🧪', `TEST COMPLETADO en ${elapsed}ms`);
@@ -513,19 +397,15 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
             };
         }
         
-        // ========== PASO 4: Click en "Compra ahora" ==========
         log('4️⃣', 'Haciendo click en Comprar ahora...');
-        
         await page.evaluate(() => {
             const buyBtn = document.querySelector('#buyNowButton input[type="submit"], #ua-buyNowButton');
             if (buyBtn) buyBtn.click();
         });
         
-        // Esperar navegación al checkout
         await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
         await sleep(2000);
         
-        // Verificar que estamos en checkout
         const currentUrl = page.url();
         if (!currentUrl.includes('order_checkout') && !currentUrl.includes('cart')) {
             log('⚠️', 'No se llegó al checkout, URL actual:', currentUrl);
@@ -535,19 +415,15 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         log('✅', 'En página de checkout');
         await cerrarPopups();
         
-        // ========== PASO 5: Click en "Pagar Ahora" (checkout) ==========
         log('5️⃣', 'Haciendo click en Pagar Ahora...');
-        
         await page.evaluate(() => {
             const payBtn = document.querySelector('.payNowButton');
             if (payBtn) payBtn.click();
         });
         
-        // Esperar navegación a selección de pago
         await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
         await sleep(2000);
         
-        // Verificar que estamos en página de pago
         const payUrl = page.url();
         if (!payUrl.includes('pay.seagm.com')) {
             log('⚠️', 'No se llegó a la página de pago, URL:', payUrl);
@@ -558,12 +434,8 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         await cerrarPopups();
         await sleep(500);
         
-        // ========== PASO 6: Seleccionar SEAGM Balance ==========
         log('6️⃣', 'Seleccionando SEAGM Balance...');
-        
-        // Buscar y hacer click en SEAGM Balance
         const balanceSeleccionado = await page.evaluate(() => {
-            // Buscar el div que contiene "SEAGM Balance"
             const allDivs = document.querySelectorAll('.channel, [class*="payment"]');
             for (const div of allDivs) {
                 if (div.textContent.includes('SEAGM Balance')) {
@@ -571,14 +443,11 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
                     return true;
                 }
             }
-            
-            // Alternativa: buscar por imagen
             const balanceImg = document.querySelector('img[alt="SEAGM Balance"]');
             if (balanceImg) {
                 balanceImg.closest('.channel, label, div')?.click();
                 return true;
             }
-            
             return false;
         });
         
@@ -587,9 +456,7 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         }
         await sleep(CONFIG.DELAY_MEDIO);
         
-        // ========== PASO 7: Click en Pay Now ==========
         log('7️⃣', 'Haciendo click en Pay Now...');
-        
         await page.evaluate(() => {
             const payNowBtn = document.querySelector('.paynow input[type="submit"], label.paynow');
             if (payNowBtn) payNowBtn.click();
@@ -597,10 +464,7 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         
         await sleep(2000);
         
-        // ========== PASO 8: Ingresar contraseña de confirmación ==========
         log('8️⃣', 'Ingresando contraseña de confirmación...');
-        
-        // Esperar el popup/form de contraseña
         await page.waitForSelector('#password, input[name="password"]', { timeout: 10000 }).catch(() => {});
         
         const passwordInput = await page.$('#password');
@@ -609,7 +473,6 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
             await passwordInput.type(CONFIG.PASSWORD, { delay: 30 });
             await sleep(CONFIG.DELAY_RAPIDO);
             
-            // Click en botón de pagar
             log('9️⃣', 'Confirmando pago...');
             await page.evaluate(() => {
                 const submitBtn = document.querySelector('#submit_button input[type="submit"], #submit_button');
@@ -619,31 +482,24 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
             log('⚠️', 'No se encontró campo de contraseña');
         }
         
-        // ========== PASO 9: Esperar confirmación ==========
         log('🔟', 'Esperando confirmación...');
         await sleep(5000);
         
-        // Buscar confirmación de "Completado"
         let orderId = null;
         let completado = false;
         
         for (let i = 0; i < 15; i++) {
             const resultado = await page.evaluate(() => {
-                // Buscar "Completado"
                 const completadoEl = document.querySelector('.stat.completed, [class*="completed"]');
                 if (completadoEl && completadoEl.textContent.includes('Completado')) {
-                    // Buscar número de orden
                     const pidEl = document.querySelector('.pid');
                     const orderId = pidEl ? pidEl.textContent.trim() : null;
                     return { completado: true, orderId };
                 }
-                
-                // Buscar error
                 const errorEl = document.querySelector('.alert, .error, [class*="error"]');
                 if (errorEl && errorEl.textContent.trim()) {
                     return { error: errorEl.textContent.trim() };
                 }
-                
                 return null;
             });
             
@@ -657,20 +513,15 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
                     break;
                 }
             }
-            
             await sleep(1000);
         }
         
         if (!completado) {
-            // Verificar la URL actual
             const finalUrl = page.url();
             log('⚠️', 'URL final:', finalUrl);
-            
-            // Tomar screenshot para debug
             const screenshotPath = `./debug_${Date.now()}.png`;
             await page.screenshot({ path: screenshotPath, fullPage: true });
             log('📸', `Screenshot guardado: ${screenshotPath}`);
-            
             return { success: false, error: 'No se pudo confirmar la compra' };
         }
         
@@ -691,22 +542,17 @@ async function ejecutarRecarga(idJugador, goldCantidad, hacerCompra = true) {
         
     } catch (e) {
         log('❌', `Error: ${e.message}`);
-        
-        // Tomar screenshot para debug
         try {
             const screenshotPath = `./error_${Date.now()}.png`;
             await page.screenshot({ path: screenshotPath, fullPage: true });
             log('📸', `Screenshot de error: ${screenshotPath}`);
         } catch (se) {}
-        
         return { success: false, error: e.message };
     }
 }
 
-// ========== COLA DE PROCESAMIENTO ==========
 async function procesarCola() {
     if (procesando || cola.length === 0) return;
-    
     procesando = true;
     
     while (cola.length > 0) {
@@ -715,28 +561,16 @@ async function procesarCola() {
         
         log('⚡', `Procesando de cola (quedan ${cola.length})`);
         
-        const resultado = await ejecutarRecarga(
-            datos.id_juego,
-            datos.gold,
-            !CONFIG.MODO_TEST
-        );
+        const resultado = await ejecutarRecarga(datos.id_juego, datos.gold, !CONFIG.MODO_TEST);
         
-        // Si fue exitoso, registrar en Supabase
         if (resultado.success && !resultado.test_mode) {
             try {
-                // Actualizar pedido como entregado
                 if (datos.pedido_id) {
                     await supabaseUpdate('pedidos_bs', 
-                        { 
-                            estado: 'entregado',
-                            order_id_seagm: resultado.order_id || null,
-                            entregado_at: new Date().toISOString()
-                        }, 
+                        { estado: 'entregado', order_id_seagm: resultado.order_id || null, entregado_at: new Date().toISOString() }, 
                         `?id=eq.${datos.pedido_id}`
                     );
                 }
-                
-                // Registrar en tabla de recargas
                 await supabaseInsert('recargas_seagm', {
                     juego: 'blood_strike',
                     id_juego: datos.id_juego,
@@ -747,7 +581,6 @@ async function procesarCola() {
                     tiempo_ms: resultado.time_ms,
                     created_at: new Date().toISOString()
                 });
-                
                 log('💾', `Registro guardado - OrderId: ${resultado.order_id || 'N/A'}`);
             } catch (e) {
                 log('⚠️', 'Error guardando en Supabase:', e.message);
@@ -755,12 +588,8 @@ async function procesarCola() {
         }
         
         resolve(resultado);
-        
-        if (cola.length > 0) {
-            await sleep(3000);
-        }
+        if (cola.length > 0) await sleep(3000);
     }
-    
     procesando = false;
 }
 
@@ -773,13 +602,11 @@ function agregarACola(datos) {
 }
 
 // ========== ENDPOINTS ==========
-
-// Estado
 app.get('/', (req, res) => {
     res.json({ 
         status: 'ok',
         servicio: 'RECARGAR-BS-SEAGM',
-        version: '1.0.0',
+        version: '1.0.1',
         plataforma: 'SEAGM',
         sesion_activa: sesionActiva,
         en_cola: cola.length,
@@ -788,21 +615,15 @@ app.get('/', (req, res) => {
     });
 });
 
-// Ping para warmup
 app.get('/ping', (req, res) => {
     res.json({ pong: true, timestamp: Date.now() });
 });
 
-// Verificar sesión
 app.get('/sesion', async (req, res) => {
     const activa = await verificarSesion();
-    res.json({ 
-        sesion_activa: activa,
-        mensaje: activa ? 'Sesión SEAGM activa' : 'Necesitas iniciar sesión'
-    });
+    res.json({ sesion_activa: activa, mensaje: activa ? 'Sesión SEAGM activa' : 'Necesitas iniciar sesión' });
 });
 
-// Guardar sesión
 app.post('/guardar-sesion', async (req, res) => {
     try {
         await guardarCookies();
@@ -813,171 +634,105 @@ app.post('/guardar-sesion', async (req, res) => {
     }
 });
 
-// Cargar cookies desde POST (para Railway donde no hay UI)
 app.post('/cargar-cookies', async (req, res) => {
     try {
         const { cookies } = req.body;
-        
         if (!cookies || !Array.isArray(cookies)) {
-            return res.json({ success: false, error: 'Envía un array de cookies en el body: { "cookies": [...] }' });
+            return res.json({ success: false, error: 'Envía { "cookies": [...] }' });
         }
-        
         if (!page) {
             return res.json({ success: false, error: 'Navegador no inicializado' });
         }
         
-        // Cargar cookies en el navegador
         await page.setCookie(...cookies);
         log('🍪', `${cookies.length} cookies cargadas via POST`);
-        
-        // Guardar en archivo
         fs.writeFileSync(CONFIG.COOKIES_FILE, JSON.stringify(cookies, null, 2));
         log('💾', 'Cookies guardadas en archivo');
         
-        // Recargar página y verificar sesión
         await page.goto(CONFIG.URL_BLOOD_STRIKE, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT });
         await sleep(2000);
         await cerrarPopups();
         
         const logueado = await verificarSesion();
-        
-        res.json({ 
-            success: logueado, 
-            mensaje: logueado ? 'Cookies cargadas y sesión activa' : 'Cookies cargadas pero sesión no válida',
-            sesion_activa: logueado
-        });
+        res.json({ success: logueado, mensaje: logueado ? 'Cookies cargadas y sesión activa' : 'Cookies cargadas pero sesión no válida', sesion_activa: logueado });
     } catch (e) {
         log('❌', 'Error cargando cookies:', e.message);
         res.json({ success: false, error: e.message });
     }
 });
 
-// Forzar login
 app.post('/login', async (req, res) => {
     log('🔐', 'Login SEAGM solicitado');
     try {
         const exito = await hacerLogin();
-        res.json({ 
-            success: exito, 
-            mensaje: exito ? 'Login exitoso' : 'Login falló'
-        });
+        res.json({ success: exito, mensaje: exito ? 'Login exitoso' : 'Login falló' });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
 });
 
-// TEST - Verificar flujo sin comprar
 app.post('/test', async (req, res) => {
     const { id_juego, gold } = req.body;
-    
     if (!id_juego || !gold) {
         return res.json({ success: false, error: 'Faltan datos (id_juego, gold)' });
     }
-    
     log('🧪', 'TEST SOLICITADO');
-    
     const resultado = await ejecutarRecarga(id_juego, parseInt(gold), false);
     res.json({ ...resultado, test_mode: true });
 });
 
-// RECARGA - Ejecutar recarga real
 app.post('/recarga', async (req, res) => {
     const { id_juego, gold, pedido_id } = req.body;
-    
     if (!id_juego || !gold) {
         return res.json({ success: false, error: 'Faltan datos (id_juego, gold)' });
     }
-    
     log('🎯', `RECARGA SOLICITADA: ID=${id_juego} Gold=${gold}`);
-    
-    const resultado = await agregarACola({
-        id_juego,
-        gold: parseInt(gold),
-        pedido_id
-    });
-    
+    const resultado = await agregarACola({ id_juego, gold: parseInt(gold), pedido_id });
     res.json(resultado);
 });
 
-// Paquetes disponibles
 app.get('/paquetes', (req, res) => {
     const paquetes = Object.entries(PAQUETES_SEAGM).map(([gold, info]) => ({
-        gold: parseInt(gold),
-        nombre: info.nombre,
-        precio_usd: info.precio,
-        sku: info.sku
+        gold: parseInt(gold), nombre: info.nombre, precio_usd: info.precio, sku: info.sku
     }));
-    
-    res.json({
-        success: true,
-        plataforma: 'SEAGM',
-        paquetes
-    });
+    res.json({ success: true, plataforma: 'SEAGM', paquetes });
 });
 
-// Balance SEAGM (intentar obtener)
 app.get('/balance', async (req, res) => {
     try {
         if (!page) {
             return res.json({ success: false, error: 'Navegador no inicializado' });
         }
-        
         const balance = await page.evaluate(() => {
             const balanceEl = document.querySelector('[class*="balance"] b, .tips b');
             if (balanceEl) return balanceEl.textContent.trim();
             return null;
         });
-        
-        res.json({ 
-            success: !!balance, 
-            balance: balance || 'No disponible',
-            sesion_activa: sesionActiva
-        });
+        res.json({ success: !!balance, balance: balance || 'No disponible', sesion_activa: sesionActiva });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
 });
 
-// ========== INICIO ==========
 async function start() {
     console.log('\n');
     log('⚔️', '═'.repeat(50));
-    log('⚔️', 'RECARGAR-BS-SEAGM v1.0 - Blood Strike / SEAGM');
+    log('⚔️', 'RECARGAR-BS-SEAGM v1.0.1 - Blood Strike / SEAGM');
     log('⚔️', '═'.repeat(50));
     log('📍', `Entorno: ${process.env.RAILWAY_ENVIRONMENT ? 'Railway' : 'Local'}`);
     log('📍', `Puerto: ${CONFIG.PORT}`);
     
     if (CONFIG.MODO_TEST) {
-        log('🧪', '═'.repeat(50));
-        log('🧪', '⚠️  MODO TEST ACTIVADO');
-        log('🧪', '   NO se realizan compras reales');
-        log('🧪', '   Para producción: MODO_TEST=false');
-        log('🧪', '═'.repeat(50));
+        log('🧪', '⚠️  MODO TEST - NO compras reales');
     } else {
-        log('🚨', '═'.repeat(50));
-        log('🚨', '💰 MODO PRODUCCIÓN ACTIVO');
-        log('🚨', '   Las compras SÍ son reales');
-        log('🚨', '   Se usará SEAGM Balance');
-        log('🚨', '═'.repeat(50));
+        log('🚨', '💰 MODO PRODUCCIÓN - Compras REALES');
     }
     
     await initBrowser();
     
     app.listen(CONFIG.PORT, '0.0.0.0', () => {
-        console.log('');
         log('⚡', `Servidor listo en puerto ${CONFIG.PORT}`);
-        console.log('');
-        log('📋', 'Endpoints:');
-        console.log('      GET  /              - Estado del servidor');
-        console.log('      GET  /ping          - Warmup');
-        console.log('      GET  /sesion        - Verificar sesión');
-        console.log('      GET  /paquetes      - Ver paquetes disponibles');
-        console.log('      GET  /balance       - Ver balance SEAGM');
-        console.log('      POST /login         - Forzar login');
-        console.log('      POST /guardar-sesion- Guardar cookies');
-        console.log('      POST /test          - 🧪 Probar sin comprar');
-        console.log('      POST /recarga       - ⚔️ Recarga real');
-        console.log('');
+        log('📋', 'Endpoints: GET /, /ping, /sesion, /paquetes, /balance | POST /login, /guardar-sesion, /cargar-cookies, /test, /recarga');
     });
 }
 
