@@ -44,7 +44,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let browser = null;
 let page = null;
 let sesionActiva = false;
-let ultimaVerificacion = null;
 let cola = [];
 let procesando = false;
 
@@ -157,31 +156,29 @@ async function cerrarPopups() {
 async function verificarSesion() {
     if (!page) return false;
     try {
-        // Si ya verificamos recientemente (últimos 5 min), confiar en el estado
-        const ahora = Date.now();
-        if (sesionActiva && ultimaVerificacion && (ahora - ultimaVerificacion) < 300000) {
-            log('✅', 'Sesión ACTIVA (verificación reciente)');
-            return true;
-        }
-        
         await cerrarPopups();
-        
-        // Verificación simple: #login-btn = no logueado, #user-btn = logueado
         const logueado = await page.evaluate(() => {
-            const loginBtn = document.querySelector('#login-btn');
-            const userBtn = document.querySelector('#user-btn');
-            
-            // Si existe user-btn, está logueado
-            if (userBtn) return true;
-            // Si existe login-btn, no está logueado
-            if (loginBtn) return false;
-            // Fallback
+            const signOutLink = document.querySelector('a[href*="/logout"], a[href*="/signout"]');
+            if (signOutLink) return true;
+            const miCuenta = Array.from(document.querySelectorAll('a')).find(a => 
+                a.textContent.includes('Mi Cuenta') || a.textContent.includes('My Account')
+            );
+            if (miCuenta && miCuenta.offsetParent !== null) return true;
+            const userDropdown = document.querySelector('.user-dropdown, .account-dropdown, [class*="user-name"]');
+            if (userDropdown && userDropdown.textContent.trim().length > 0) return true;
+            const userIcon = document.querySelector('.user-icon + span, .avatar + span');
+            if (userIcon && userIcon.textContent.trim().length > 0) return true;
+            const signInBtn = document.querySelector('a[href*="/sso/login"]:not([class*="hide"])');
+            if (signInBtn) {
+                const hasLogout = document.querySelector('a[href*="/logout"]');
+                return !!hasLogout;
+            }
+            const bodyText = document.body.innerText;
+            if (bodyText.includes('jose.emigdio') || bodyText.includes('JOSE')) return true;
             return false;
         });
-        
         sesionActiva = logueado;
-        if (logueado) ultimaVerificacion = ahora;
-        log(logueado ? '✅' : '❌', `Sesión: ${logueado ? 'ACTIVA' : 'NO ACTIVA'}`);
+        log(logueado ? '✅' : '❌', `Verificación de sesión: ${logueado ? 'ACTIVA' : 'NO ACTIVA'}`);
         return logueado;
     } catch (e) {
         log('⚠️', 'Error verificando sesión:', e.message);
@@ -704,25 +701,6 @@ app.post('/login', async (req, res) => {
     try {
         const exito = await hacerLogin();
         res.json({ success: exito, mensaje: exito ? 'Login exitoso' : 'Login falló' });
-    } catch (e) {
-        res.json({ success: false, error: e.message });
-    }
-});
-
-// Reiniciar navegador sin redeploy
-app.post('/reiniciar', async (req, res) => {
-    log('🔄', 'Reiniciando navegador...');
-    try {
-        if (browser) {
-            await browser.close().catch(() => {});
-        }
-        browser = null;
-        page = null;
-        sesionActiva = false;
-        ultimaVerificacion = null;
-        
-        await iniciarNavegador();
-        res.json({ success: true, mensaje: 'Navegador reiniciado' });
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
